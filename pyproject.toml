@@ -24,5 +24,7 @@ dependencies = [
     "open3d",
     "laspy[lazrs,laszip]",
     "pyvista[jupyter]",
-    "trame"
+    "trame",
+    "universal_pathlib",
+    "webdav4[fsspec]",
 ]
