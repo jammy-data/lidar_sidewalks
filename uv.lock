@@ -1374,6 +1374,7 @@ dependencies = [
     { name = "numpy" },
     { name = "open3d" },
     { name = "pandas" },
+    { name = "pdal" },
     { name = "plotly" },
     { name = "pyarrow" },
     { name = "python-dotenv" },
@@ -1400,6 +1401,7 @@ requires-dist = [
     { name = "numpy" },
     { name = "open3d" },
     { name = "pandas" },
+    { name = "pdal" },
     { name = "plotly" },
     { name = "pyarrow", specifier = ">=20.0.0" },
     { name = "python-dotenv" },
@@ -1941,6 +1943,15 @@ sdist = { url = "https://files.pythonhosted.org/packages/66/94/68e2e17afaa9169cf
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c6/ac/dac4a63f978e4dcb3c6d3a78c4d8e0192a113d288502a1216950c41b1027/parso-0.8.4-py2.py3-none-any.whl", hash = "sha256:a418670a20291dacd2dddc80c377c5c3791378ee1e8d12bffc35420643d43f18", size = 103650, upload-time = "2024-04-05T09:43:53.299Z" },
 ]
+
+[[package]]
+name = "pdal"
+version = "3.5.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/09/0d/0bd51e890e68eb1fee2bfea9d20e983a36467d5707f420452f3cd56c1cf1/pdal-3.5.3.tar.gz", hash = "sha256:1d8fb955b91b97ff927d99295d719f8dada16b2c85f778d5c38cf04dcd44f3cc", size = 113622, upload-time = "2025-09-03T16:44:27.742Z" }
 
 [[package]]
 name = "pexpect"

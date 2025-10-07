@@ -1,0 +1,14 @@
+{
+  "pipeline": [
+    "bologna.laz",
+    {
+      "type": "filters.normal",
+      "knn": 20
+    },
+    {
+      "type": "writers.las",
+      "filename": "bologna_with_normals.laz",
+      "extra_dims": "all"
+    }
+  ]
+}

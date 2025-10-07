@@ -27,4 +27,5 @@ dependencies = [
     "trame",
     "universal_pathlib",
     "webdav4[fsspec]",
+    "pdal",
 ]
