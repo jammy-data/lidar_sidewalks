@@ -28,4 +28,5 @@ dependencies = [
     "universal_pathlib",
     "webdav4[fsspec]",
     "pdal",
+    "shap"
 ]
