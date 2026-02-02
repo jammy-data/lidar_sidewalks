@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "pandas",
-    "numpy",
+    "numpy<2",
     "scikit-learn",
     "matplotlib",
     "seaborn",
@@ -27,6 +27,6 @@ dependencies = [
     "trame",
     "universal_pathlib",
     "webdav4[fsspec]",
-    "pdal",
-    "shap"
+    "shap>=0.41",
+    "fasttreeshap"
 ]
