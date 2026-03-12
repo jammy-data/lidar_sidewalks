@@ -1,5 +1,13 @@
 # src/data_loader.py
 
+"""Data loading utilities for fetching and optionally processing LiDAR files.
+
+Primary workflow:
+1) download a LAZ file from remote storage (B2Drop) when needed,
+2) cache it locally,
+3) optionally run a lightweight PDAL processing pipeline.
+"""
+
 import os
 import json
 from pathlib import Path
@@ -19,24 +27,31 @@ def fetch_and_process_lidar(
     apply_filter: bool = False,
 ) -> Path:
     """
-    Fetches a remote LiDAR (.laz) file from B2Drop, saves it locally, 
-    and optionally processes it with PDAL.
+    Fetch a remote LiDAR file and optionally run PDAL post-processing.
 
     Parameters
     ----------
     remote_filename : str
-        Name of the remote file in your B2Drop storage (e.g., "bologna.laz").
+        Name of the remote file in B2Drop storage (e.g., "bologna.laz").
     local_dir : str, optional
-        Local directory where the file will be saved (default: "../data").
+        Local directory where files are cached.
     filtered_suffix : str, optional
-        Suffix to append to the processed file name (default: "_filtered").
+        Suffix appended to the PDAL-processed output filename.
     apply_filter : bool, optional
-        If True, runs a PDAL pipeline with a basic stats filter.
+        When True, runs a small PDAL pipeline and writes a LAS output.
 
     Returns
     -------
     Path
-        Path to the processed (or downloaded) LAS file.
+        Path to downloaded file (or processed file if `apply_filter=True`).
+
+    Notes
+    -----
+    Environment variables expected:
+    - DATA_DIR_FSSPEC_USER
+    - DATA_DIR_FSSPEC_PASS
+    - DATA_DIR_FSSPEC_BASE_URL
+    - DATA_DIR_FSSPEC_URI
     """
 
     # --- Setup local path ---

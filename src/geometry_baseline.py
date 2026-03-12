@@ -1,5 +1,17 @@
 from __future__ import annotations
 
+"""Minimal geometry-first utilities for sidewalk/road analysis.
+
+The functions in this module are designed to keep the early pipeline
+interpretable:
+- point-level local PCA features,
+- simple voxel superpoints,
+- neighborhood-context aggregation,
+- segment-level ML matrix preparation.
+
+They are used directly from notebooks to support iterative experimentation.
+"""
+
 import numpy as np
 import pandas as pd
 from sklearn.neighbors import NearestNeighbors
@@ -13,6 +25,29 @@ def compute_local_geometric_features(
     random_state: int = 42,
     n_jobs: int = -1,
 ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    """Compute local geometric descriptors on a sampled point subset.
+
+    Parameters
+    ----------
+    points_xyz : np.ndarray
+        Input point coordinates of shape (N, 3).
+    k_neighbors : int, default=20
+        Number of nearest neighbors used for local covariance/PCA.
+    sample_size : int | None, default=300_000
+        Number of points randomly sampled for feature computation.
+        If None, uses all points.
+    random_state : int, default=42
+        Seed used when sampling points.
+    n_jobs : int, default=-1
+        Parallelism setting passed to sklearn nearest-neighbor search.
+
+    Returns
+    -------
+    tuple[np.ndarray, dict[str, np.ndarray]]
+        Sample indices into the original cloud, and dictionary containing
+        pointwise feature arrays (`slope_deg`, `curvature`, `roughness`,
+        `local_height_std`, `abs_nz`).
+    """
     if points_xyz.ndim != 2 or points_xyz.shape[1] != 3:
         raise ValueError("points_xyz must be shape (N, 3)")
     if points_xyz.shape[0] < 4:
@@ -63,6 +98,11 @@ def summarize_features_by_class(
     sampled_labels: np.ndarray,
     class_map: dict[int, str],
 ) -> pd.DataFrame:
+    """Summarize feature distributions for selected semantic classes.
+
+    Returns per-class per-feature summary statistics (mean/median/p10/p90)
+    useful for quick separability checks.
+    """
     rows: list[dict] = []
     for class_id, class_name in class_map.items():
         mask = sampled_labels == class_id
@@ -92,6 +132,12 @@ def build_superpoints_voxel(
     voxel_size: float = 0.25,
     min_points: int = 30,
 ) -> tuple[np.ndarray, pd.DataFrame]:
+    """Build voxel superpoints and aggregate point features per segment.
+
+    Points are grouped by voxel index (`floor(XYZ / voxel_size)`), tiny groups
+    are discarded via `min_points`, and each retained segment gets geometric
+    summary statistics.
+    """
     if points_xyz.ndim != 2 or points_xyz.shape[1] != 3:
         raise ValueError("points_xyz must be shape (N, 3)")
     n = points_xyz.shape[0]
@@ -144,6 +190,11 @@ def build_segment_context_features(
     segment_df: pd.DataFrame,
     n_neighbors: int = 8,
 ) -> pd.DataFrame:
+    """Augment segment features with neighborhood-context statistics.
+
+    For each segment, this computes mean/std of neighboring segment features
+    and a delta-to-neighborhood signal, plus neighborhood distance metrics.
+    """
     if segment_df.empty:
         return segment_df.copy()
 
@@ -182,6 +233,10 @@ def assign_segment_majority_labels(
     superpoint_id: np.ndarray,
     point_labels: np.ndarray,
 ) -> pd.DataFrame:
+    """Assign one target label per segment using majority vote from points.
+
+    Also returns segment label purity to help diagnose noisy/mixed segments.
+    """
     if superpoint_id.shape[0] != point_labels.shape[0]:
         raise ValueError("superpoint_id and point_labels must have same length")
 
@@ -211,6 +266,11 @@ def prepare_segment_ml_matrix(
     labels_df: pd.DataFrame,
     keep_labels: tuple[int, ...],
 ) -> tuple[np.ndarray, np.ndarray, list[str], StandardScaler]:
+    """Prepare standardized segment-level feature matrix for ML experiments.
+
+    Merges context features with majority labels, filters to selected classes,
+    and returns scaled `X`, integer labels `y`, feature names, and fitted scaler.
+    """
     merged = segment_ctx_df.merge(labels_df, on="segment_id", how="inner")
     merged = merged[merged["target_label"].isin(keep_labels)].copy()
     if merged.empty:

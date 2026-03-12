@@ -1,5 +1,18 @@
 from __future__ import annotations
 
+"""Reusable helpers for carriageway-focused classification notebooks.
+
+This module centralizes the data schema handling and evaluation helpers used in
+`Notebooks/4_carriageway_focus.ipynb`.
+
+Key responsibilities:
+- map raw LAS classes into the 3-class target space,
+- harmonize city files with heterogeneous feature schemas,
+- derive comparable eigenvalue-based geometric descriptors,
+- align feature spaces across cities for fair LOCO evaluation,
+- provide common plotting and ablation helpers.
+"""
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -72,6 +85,13 @@ EIGEN_SCALES = [0.1, 0.5, 1.0]
 
 
 def map_to_three_classes(classification_array: np.ndarray) -> np.ndarray:
+    """Map raw LAS classification codes to a 3-class target.
+
+    Mapping used throughout this project:
+    - 2  -> sidewalk
+    - 11 -> street
+    - all others -> other (0)
+    """
     return np.where(
         classification_array == 2,
         2,
@@ -86,6 +106,11 @@ def las_to_three_class_df(
     n_sample: int | None = None,
     random_seed: int = 42,
 ) -> pd.DataFrame:
+    """Build a city DataFrame using an explicit required schema.
+
+    This strict loader is useful when all expected engineered dimensions are
+    guaranteed to exist.
+    """
     available_dims = set(las_obj.point_format.dimension_names)
     missing = [col for col in required_columns if col not in available_dims]
     if missing:
@@ -103,14 +128,88 @@ def las_to_three_class_df(
 
 
 def _scale_suffix(scale: float) -> str:
+    """Convert numeric scale to column-safe suffix (e.g. 0.5 -> '0p5')."""
     return str(scale).replace(".", "p")
 
 
 def _eigen_triplet_exists(available_dims: set[str], scale: float) -> bool:
+    """Return True when all three eigenvalue dimensions exist for a scale."""
     return all(
         f"{k} eigenvalue ({scale:g})" in available_dims
         for k in ("1st", "2nd", "3rd")
     )
+
+
+def extract_eigen_triplets_from_las(
+    las_obj,
+    scales: list[float] | None = None,
+) -> dict[float, tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """Extract LAS-provided eigenvalue triplets for requested scales.
+
+    Returns
+    -------
+    dict[float, tuple[np.ndarray, np.ndarray, np.ndarray]]
+        Mapping scale -> (lambda1, lambda2, lambda3), where lambda1 >= lambda2 >= lambda3.
+        Only scales with complete triplets in the LAS are returned.
+    """
+    scales = scales or EIGEN_SCALES
+    dims = set(las_obj.point_format.dimension_names)
+
+    out: dict[float, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    for scale in scales:
+        if not _eigen_triplet_exists(dims, scale):
+            continue
+        l1 = np.asarray(getattr(las_obj, f"1st eigenvalue ({scale:g})"), dtype=np.float64)
+        l2 = np.asarray(getattr(las_obj, f"2nd eigenvalue ({scale:g})"), dtype=np.float64)
+        l3 = np.asarray(getattr(las_obj, f"3rd eigenvalue ({scale:g})"), dtype=np.float64)
+        out[scale] = (l1, l2, l3)
+    return out
+
+
+def derive_geometry_features_from_eigen_triplets(
+    eigen_by_scale: dict[float, tuple[np.ndarray, np.ndarray, np.ndarray]],
+) -> dict[str, np.ndarray]:
+    """Derive harmonized geometric features from eigenvalue triplets.
+
+    Parameters
+    ----------
+    eigen_by_scale : dict
+        Mapping `scale -> (lambda1, lambda2, lambda3)`.
+
+    Returns
+    -------
+    dict[str, np.ndarray]
+        Derived features keyed by harmonized names like
+        `planarity_0p5`, `curvature_1p0`, `roughness_0p1`, etc.
+    """
+    eps = 1e-12
+    features: dict[str, np.ndarray] = {}
+
+    for scale, (l1, l2, l3) in eigen_by_scale.items():
+        l1 = np.asarray(l1, dtype=np.float64)
+        l2 = np.asarray(l2, dtype=np.float64)
+        l3 = np.asarray(l3, dtype=np.float64)
+
+        l1_safe = np.maximum(l1, eps)
+        lam_sum = np.maximum(l1 + l2 + l3, eps)
+        p1 = l1 / lam_sum
+        p2 = l2 / lam_sum
+        p3 = l3 / lam_sum
+        suffix = _scale_suffix(scale)
+
+        features[f"eig1_{suffix}"] = l1.astype(np.float32)
+        features[f"eig2_{suffix}"] = l2.astype(np.float32)
+        features[f"eig3_{suffix}"] = l3.astype(np.float32)
+        features[f"planarity_{suffix}"] = ((l2 - l3) / l1_safe).astype(np.float32)
+        features[f"sphericity_{suffix}"] = (l3 / l1_safe).astype(np.float32)
+        features[f"anisotropy_{suffix}"] = ((l1 - l3) / l1_safe).astype(np.float32)
+        features[f"curvature_{suffix}"] = (l3 / lam_sum).astype(np.float32)
+        features[f"eigenentropy_{suffix}"] = (
+            -(p1 * np.log(np.maximum(p1, eps)) + p2 * np.log(np.maximum(p2, eps)) + p3 * np.log(np.maximum(p3, eps)))
+        ).astype(np.float32)
+        features[f"roughness_{suffix}"] = np.sqrt(np.maximum(l3, 0.0)).astype(np.float32)
+
+    return features
 
 
 def build_harmonized_city_df(
@@ -119,6 +218,17 @@ def build_harmonized_city_df(
     n_sample: int | None = None,
     random_seed: int = 42,
 ) -> pd.DataFrame:
+    """Create a harmonized per-city feature table from heterogeneous LAS schemas.
+
+    Strategy:
+    1) keep present base fields,
+    2) include raw roughness columns when available,
+    3) derive consistent eigen descriptors from eigenvalue triplets,
+    4) add project target labels.
+
+    This function intentionally tolerates missing optional fields while still
+    enforcing minimal geometry/classification availability.
+    """
     available_dims = set(las_obj.point_format.dimension_names)
 
     missing_min = [col for col in MIN_REQUIRED_FIELDS if col not in available_dims]
@@ -128,36 +238,22 @@ def build_harmonized_city_df(
     present_base = [col for col in BASE_COMPAT_FIELDS if col in available_dims]
     df = pd.DataFrame({col: np.asarray(getattr(las_obj, col)) for col in present_base})
 
-    # Optional direct roughness fields when present
-    for scale in EIGEN_SCALES:
-        rough_col = f"Roughness ({scale:g})"
-        if rough_col in available_dims:
-            df[f"roughness_{_scale_suffix(scale)}"] = np.asarray(getattr(las_obj, rough_col), dtype=np.float32)
+    # Harmonized vertical feature for comparability across cities.
+    # Prefer LAS-provided normalized height when available; otherwise create a
+    # city-centered fallback from raw Z.
+    if "height_division" in df.columns:
+        df["z_norm"] = np.asarray(df["height_division"], dtype=np.float32)
+    else:
+        z = np.asarray(df["Z"], dtype=np.float64)
+        df["z_norm"] = (z - np.median(z)).astype(np.float32)
 
-    # Derive harmonized eigen features where eigen triplets exist
-    eps = 1e-12
-    for scale in EIGEN_SCALES:
-        if not _eigen_triplet_exists(available_dims, scale):
-            continue
-
-        l1 = np.asarray(getattr(las_obj, f"1st eigenvalue ({scale:g})"), dtype=np.float64)
-        l2 = np.asarray(getattr(las_obj, f"2nd eigenvalue ({scale:g})"), dtype=np.float64)
-        l3 = np.asarray(getattr(las_obj, f"3rd eigenvalue ({scale:g})"), dtype=np.float64)
-
-        l1_safe = np.maximum(l1, eps)
-        lam_sum = np.maximum(l1 + l2 + l3, eps)
-        p1 = l1 / lam_sum
-        p2 = l2 / lam_sum
-        p3 = l3 / lam_sum
-        suffix = _scale_suffix(scale)
-
-        df[f"planarity_{suffix}"] = ((l2 - l3) / l1_safe).astype(np.float32)
-        df[f"sphericity_{suffix}"] = (l3 / l1_safe).astype(np.float32)
-        df[f"anisotropy_{suffix}"] = ((l1 - l3) / l1_safe).astype(np.float32)
-        df[f"curvature_{suffix}"] = (l3 / lam_sum).astype(np.float32)
-        df[f"eigenentropy_{suffix}"] = (
-            -(p1 * np.log(np.maximum(p1, eps)) + p2 * np.log(np.maximum(p2, eps)) + p3 * np.log(np.maximum(p3, eps)))
-        ).astype(np.float32)
+    # Two-step eigen workflow:
+    # 1) extract raw eigenvalue triplets from LAS,
+    # 2) derive harmonized geometric features from those triplets.
+    eigen_by_scale = extract_eigen_triplets_from_las(las_obj, scales=EIGEN_SCALES)
+    derived = derive_geometry_features_from_eigen_triplets(eigen_by_scale)
+    for col, values in derived.items():
+        df[col] = values
 
     # Target + city label
     df["classification"] = df["classification"].astype(np.uint8)
@@ -171,14 +267,21 @@ def build_harmonized_city_df(
 
     if n_sample is not None and n_sample < len(df):
         df = df.sample(n=n_sample, random_state=random_seed).copy()
-
+    print(f"{city_name}: {len(df)} points, {len(df.columns)} features (including target)")
     return df
+    
 
 
 def align_city_feature_space(
     city_dfs: dict[str, pd.DataFrame],
     protected_cols: tuple[str, ...] = ("target", "city", "classification"),
+    drop_raw_z_if_z_norm: bool = True,
 ) -> tuple[dict[str, pd.DataFrame], list[str]]:
+    """Align multiple city tables to their strict common feature intersection.
+
+    Ensures every city is trained/evaluated with exactly the same predictors,
+    which is required for fair cross-city comparability.
+    """
     if not city_dfs:
         raise ValueError("city_dfs must not be empty")
 
@@ -191,6 +294,9 @@ def align_city_feature_space(
     common_features = sorted(set.intersection(*feature_sets))
     if len(common_features) == 0:
         raise ValueError("No common feature columns across cities after harmonization")
+
+    if drop_raw_z_if_z_norm and "z_norm" in common_features and "Z" in common_features:
+        common_features = [f for f in common_features if f != "Z"]
 
     aligned = {}
     keep_cols = common_features + [c for c in protected_cols if c in city_dfs[city_names[0]].columns]
@@ -206,6 +312,7 @@ def balance_tile(
     target_col: str = "target",
     random_state: int = 42,
 ) -> pd.DataFrame:
+    """Downsample each class inside one tile to the smallest class count."""
     counts = df_tile[target_col].value_counts()
     n_min = counts.min()
     return df_tile.groupby(target_col, group_keys=False).sample(
@@ -221,6 +328,7 @@ def build_balanced_tile_split(
     target_col: str = "target",
     random_state: int = 42,
 ) -> pd.DataFrame:
+    """Build a split DataFrame by balancing class counts independently per tile."""
     chunks = []
     for tile_id in sorted(tile_ids):
         tile_df = df_all[df_all[tile_col] == tile_id]
@@ -239,6 +347,7 @@ def plot_confusion_matrix(
     normalize: bool = True,
     figsize: tuple[int, int] = (8, 6),
 ) -> None:
+    """Render a labeled confusion matrix heatmap (raw or row-normalized)."""
     if normalize:
         cm_display = cm.astype("float") / cm.sum(axis=1, keepdims=True)
         fmt = ".2%"
@@ -273,6 +382,11 @@ def run_loco_with_class_weight(
     random_seed: int,
     n_jobs: int,
 ) -> pd.DataFrame:
+    """Run LOCO evaluation for one class-weight strategy and return summary rows.
+
+    Each row corresponds to one held-out test city and stores key aggregate
+    metrics used in model-comparison tables.
+    """
     rows = []
     for test_city in city_dfs.keys():
         train_city_list = [city for city in city_dfs.keys() if city != test_city]

@@ -1,221 +1,208 @@
 # lidar_sidewalks
 
-Geometry-first pipeline to classify TLS point clouds into:
-- `0` = other
-- `1` = road
-- `2` = sidewalk
+A research pipeline for classifying **Terrestrial Laser Scanning (TLS) point clouds** of European city streets into three surface categories:
 
-The baseline is rule-based (no deep learning), patch-centric, and designed to scale to large clouds through downsampling and configurable parallel computation.
+| Class code | Label | Description |
+|---|---|---|
+| `0` | **other** | Vegetation, buildings, vehicles, street furniture, etc. |
+| `2` | **sidewalk** | Pavements and pedestrian surfaces |
+| `11` | **street** | Carriageway / road surface |
 
-## Implemented Pipeline
+The project progresses from simple exploratory analysis through rule-based geometry, Random Forest classification, feature engineering, and ultimately a segment-first classify-second pipeline validated across multiple cities.
 
-1. Preprocessing
-	- Optional voxel downsampling
-	- kNN + PCA normal estimation
-	- Curvature and roughness estimation
-2. Horizontal extraction
-	- Filters by vertical normal component and curvature (optional roughness)
-3. Superpoint segmentation
-	- Region growing on horizontal candidates
-4. Patch features
-	- Height stats, roughness, curvature, area proxy, principal axes, elongation
-5. Patch graph
-	- Bounding-box proximity graph
-6. Rule-based classification
-	- Road identification from large/connected horizontal patches
-	- Sidewalk identification for curb and no-curb cases
-	- Grass rejection based on roughness/curvature/area
-7. Postprocess
-	- Small fragment cleanup
-	- Optional point-level kNN majority smoothing
-8. Optional ML boost
-	- RandomForest helpers for patch-level training/inference
+---
+
+## Notebook Guide
+
+Each notebook builds on the previous one. The progression moves from beginner-friendly data exploration through increasingly complex multi-city machine learning.
+
+### 0 — Data Exploration (`0 Data exploration.ipynb`)
+
+**Beginner-friendly starting point.** Opens and inspects a Bologna `.laz` file for the first time — what columns exist, how many points there are, what the bounding box is. Produces 2-D top-down scatter plots (coloured by height and by IFP label) and an interactive 3-D Open3D view. Introduces RANSAC plane detection to find the dominant flat surface (the road). No modelling — this is pure data familiarisation.
+
+> **Key output:** Top-down visualisations of height and classification labels. Understanding of the IFP labelling scheme.
+
+---
+
+### 1 — Carriageway Classification (`1 Carriageway classification.ipynb`)
+
+**First ML model.** Filters to road (class 11) and pavement (class 2) points only; downsamples to a balanced 100 k per class; trains a binary Random Forest on colour + intensity + height. Adds surface normals as an extra geometric feature (normal_z ≈ 1 for horizontal surfaces). Extends to a three-class model (sidewalk / road / other) and optimises hyper-parameters with GridSearchCV. Includes unsupervised clustering (K-Means, DBSCAN) for exploratory analysis.
+
+> **Key output:** Binary and three-class Random Forest classifiers; cross-validated F1 scores; 3-D visualisation of misclassifications.
+
+---
+
+### 2 — Model Class Experiments (`2_model_class_experiments.ipynb`)
+
+**Identifying spatial overfitting.** Runs three structured experiments on the Riga dataset: (A) features without X/Y coordinates — reveals the model's true reliance on spatial position; (B) three-class model with coordinates included; (C) spatial tile-based split — divides the map into a 4×4 grid and holds out one complete tile for testing. Compares random-split vs spatial-split F1 scores side by side. Adds SHAP analysis to explain which features drive each prediction.
+
+> **Key output:** Exposure of spatial overfitting; side-by-side random vs spatial F1 comparison; SHAP feature importance charts.
+
+---
+
+### 3 — Additional Features (`3_additional_features.ipynb`)
+
+**Richer geometry features.** Loads a version of the Bologna point cloud with **37 pre-computed multi-scale geometric descriptors** (eigenvalue-derived: planarity, sphericity, anisotropy, curvature, eigenentropy, roughness at 0.1 m and 0.5 m scales). Re-runs the Experiments A/B/C framework from Notebook 2 on this richer feature set. Uses `psutil` for memory monitoring, feature correlation heatmaps to identify redundant columns, and `fasttreeshap` / SHAP for feature importance analysis.
+
+> **Key output:** Richer feature set; SHAP summary plots evaluating multi-scale geometry vs simple colour/height features.
+
+---
+
+### 4 — Carriageway Focus (`4_carriageway_focus.ipynb`)
+
+**Multi-city generalisation.** Introduces five European cities: Bologna, Riga, Utrecht, Vilnius, and Warsaw. Part 1 builds a tiled single-city (Bologna) baseline with a 65/17.5/17.5 % train/val/test spatial split. Part 2 runs a full **Leave-One-City-Out (LOCO)** evaluation — trains on four cities, tests on the fifth — using eigenvalue geometry features harmonised across all cities. Three targeted controls handle class imbalance: per-fold class weighting, probability override for minority classes, and fold-wise `StandardScaler`. Includes error signature analysis to identify which features drive misclassifications in the hardest cities.
+
+> **Key output:** LOCO summary table (balanced accuracy + macro F1 per held-out city); per-city confusion matrices; error signature diagnostics.
+
+---
+
+### 5 — Deep Learning Exploration (`5_DL_exploration.ipynb`)
+
+**Theory + geometry baseline.** Two halves: (1) a detailed literature review of PointNet++, graph-based segmentation, and the stripe-based approach (Hou & Ai, 2020); (2) a from-scratch geometry baseline — compute per-point geometric features (slope, curvature, roughness, normal direction), group points into **voxel superpoints**, enrich each superpoint with context features from its neighbours, and train a Logistic Regression classifier. Introduces graph smoothing (majority-vote over a k-NN segment graph) to reduce isolated misclassifications.
+
+> **Key output:** KDE feature comparison plots (road vs pavement); segment-level Logistic Regression confusion matrix; balanced accuracy before and after graph smoothing.
+
+---
+
+### 6 — Segment-first, Classify-second (`6_segment_first_classify_second.ipynb`)
+
+**Full multi-city pipeline.** Formalises the segment-then-classify approach from Notebook 5 into a clean, reproducible, multi-city workflow across Riga, Utrecht, Vilnius, and Warsaw. For each city: sample 250 k points → compute local geometric features → build voxel superpoints → enrich with 8-neighbour context features → assign majority-vote ground-truth labels. Then runs LOCO at segment level with a 250-tree Random Forest (`balanced_subsample` class weighting). Provides `segment_first_classify_second()` as a reusable end-to-end inference function, and analyses the top-15 misclassification transitions on the Riga test set.
+
+> **Key output:** Segment-level LOCO summary; end-to-end inference pipeline; Riga confusion matrix + top misclassification transitions.
+
+---
 
 ## Source Layout
 
-- `src/geometry/preprocess.py`
-- `src/geometry/normals.py`
-- `src/segmentation/horizontal_filter.py`
-- `src/segmentation/region_growing.py`
-- `src/graph/adjacency.py`
-- `src/classification/rule_based.py`
-- `src/classification/random_forest.py`
-- `src/postprocess/smoothing.py`
-- `src/pipeline.py`
-- `config.py`
+```
+src/
+├── data_loader.py              — fetches and pre-processes LAS/LAZ files
+├── helpers.py                  — shared utilities (describe_las, etc.)
+├── geometry_baseline.py        — per-point feature computation, superpoint segmentation,
+│                                 context features, segment majority labelling
+├── carriageway_focus_utils.py  — multi-city helpers: eigenvalue extraction, feature
+│                                 harmonisation, tiled split, LOCO utilities
+└── classification/
+    └── rule_based.py           — rule-based geometry classifier (horizontal filter,
+                                  region growing, patch classification)
 
-## Usage
-
-```python
-import numpy as np
-from config import PipelineConfig
-from src.pipeline import LidarRoadSidewalkPipeline
-
-points_xyz = np.random.rand(1_000_000, 3)  # replace with TLS cloud XYZ
-
-config = PipelineConfig(
-	 voxel_size=0.1,
-	 k_neighbors=30,
-	 normal_vertical_threshold=0.9,
-	 curvature_threshold=0.05,
-	 region_normal_angle_deg=10.0,
-	 region_distance=0.2,
-	 curb_height_min=0.05,
-	 curb_height_max=0.25,
-	 large_area_threshold=10.0,
-	segmentation_mode="region_growing",  # or "stripe_octree"
-)
-
-pipeline = LidarRoadSidewalkPipeline(config)
-labels = pipeline.run(points_xyz)  # shape (N,), values in {0,1,2}
+config.py                       — PipelineConfig dataclass with all tunable parameters
 ```
 
-To inspect internal outputs:
+---
 
-```python
-labels, aux = pipeline.run(points_xyz, return_intermediate=True)
-```
+## Quick Start
 
-## Clear Step-by-Step Runbook
-
-### Step 1 — Load point cloud as `Nx3`
+### 1. Load a point cloud
 
 ```python
 import laspy
 import numpy as np
 
 las = laspy.read("/path/to/cloud.laz")
-points_xyz = np.column_stack([las.x, las.y, las.z]).astype(np.float64)
+print(f"Points: {las.header.point_count:,}")
+print("Columns:", list(las.point_format.dimension_names))
 ```
 
-### Step 2 — Configure thresholds
+### 2. Run the segment-first classify-second pipeline (Notebook 6 approach)
 
 ```python
-from config import PipelineConfig
+import numpy as np
+from pathlib import Path
+import laspy
+from sklearn.ensemble import RandomForestClassifier
 
-config = PipelineConfig(
-	voxel_size=0.1,
-	k_neighbors=30,
-	normal_vertical_threshold=0.9,
-	curvature_threshold=0.05,
-	region_normal_angle_deg=10.0,
-	region_distance=0.2,
-	curb_height_min=0.05,
-	curb_height_max=0.25,
-	large_area_threshold=10.0,
+# Import helpers from src/
+from src.geometry_baseline import (
+    compute_local_geometric_features,
+    build_superpoints_voxel,
+    build_segment_context_features,
+    assign_segment_majority_labels,
 )
+
+# Load and sample
+las     = laspy.read("/path/to/city.laz")
+xyz     = np.column_stack([las.x, las.y, las.z]).astype(np.float64)
+labels  = np.asarray(las.classification)
+
+# 1 — geometric features (k=20 neighbours, 250k sample)
+sample_idx, feats = compute_local_geometric_features(xyz, k_neighbors=20, sample_size=250_000)
+
+# 2 — voxel superpoints (0.6 m grid)
+sp_id, seg_df = build_superpoints_voxel(xyz[sample_idx], feats, voxel_size=0.6, min_points=8)
+
+# 3 — context features (8 nearest neighbour segments)
+seg_ctx = build_segment_context_features(seg_df, n_neighbors=8)
+
+# 4 — ground-truth labels per segment
+seg_lbl = assign_segment_majority_labels(sp_id, labels[sample_idx])
+
+# 5 — prepare training set
+seg = seg_ctx.merge(seg_lbl, on="segment_id", how="inner")
+feature_cols = [c for c in seg.columns if c not in {"segment_id","target_label","target_purity"}]
+X, y = seg[feature_cols].values, seg["target_label"].values
+
+# 6 — train classifier (three classes: 0=other, 2=sidewalk, 11=street)
+clf = RandomForestClassifier(n_estimators=250, class_weight="balanced_subsample", n_jobs=-1)
+clf.fit(X, y)
 ```
 
-### Step 3 — Run baseline pipeline
+### 3. Save predictions
 
 ```python
-from src.pipeline import LidarRoadSidewalkPipeline
+y_pred = clf.predict(X)
 
-pipeline = LidarRoadSidewalkPipeline(config)
-labels = pipeline.run(points_xyz)
-```
+# Map predictions back to points (each point → its segment's prediction)
+seg_pred_map = dict(zip(seg["segment_id"], y_pred))
+point_labels = np.array([seg_pred_map.get(sid, 0) for sid in sp_id])
 
-### Step 4 — Inspect class counts
-
-```python
-unique, counts = np.unique(labels, return_counts=True)
-print(dict(zip(unique.tolist(), counts.tolist())))
-```
-
-### Step 5 — Save labels (optional)
-
-```python
+# Write back to LAS
 las.add_extra_dim(laspy.ExtraBytesParams(name="pred_label", type=np.uint8))
-las.pred_label = labels
+las.pred_label = point_labels
 las.write("/path/to/cloud_with_labels.laz")
 ```
 
-### Step 6 — Large cloud mode (tiled)
+---
 
-Use this for clouds where full-scene neighborhood processing is heavy.
+## Recommended Notebook Order
 
-```python
-from src.pipeline_tiled import run_pipeline_tiled
+If you are new to the project, work through the notebooks in sequence:
 
-labels_tiled = run_pipeline_tiled(
-	points_xyz=points_xyz,
-	pipeline=pipeline,
-	tile_size_xy=100.0,
-	tile_overlap_xy=2.0,
-	min_points_per_tile=500,
-)
+```
+0 Data exploration            ← start here; no modelling, just look at the data
+1 Carriageway classification  ← first ML model (Random Forest)
+2 Model class experiments     ← spatial overfitting diagnosis
+3 Additional features         ← richer multi-scale geometry features + SHAP
+4 Carriageway focus           ← multi-city LOCO with eigenvalue features
+5 DL exploration              ← theory + geometry baseline prototype
+6 Segment-first classify-second ← production-ready multi-city pipeline
 ```
 
-### Step 6b — Stripe + Octree mode (long-distance distortion handling)
+---
 
-Use this when terrain slope or long-range drift makes global geometry less stable.
+## Dependencies
 
-```python
-config_octree = PipelineConfig(
-	segmentation_mode="stripe_octree",
-	stripe_width=25.0,
-	octree_max_leaf_points=400,
-	octree_min_cell_size=0.5,
-	octree_planarity_max_curvature=0.02,
-	octree_merge_distance=1.0,
-	octree_merge_normal_angle_deg=10.0,
-	octree_merge_height_delta=0.08,
-)
+Key Python packages (see `requirements.txt` for full list):
 
-pipeline_octree = LidarRoadSidewalkPipeline(config_octree)
-labels_octree = pipeline_octree.run(points_xyz)
-```
+| Package | Purpose |
+|---|---|
+| `laspy` | Read/write `.las` / `.laz` point cloud files |
+| `numpy` | Numerical array operations |
+| `pandas` | Tabular data |
+| `scikit-learn` | Machine learning (Random Forest, LogReg, StandardScaler, metrics) |
+| `open3d` | 3-D point cloud visualisation and geometry |
+| `matplotlib` / `seaborn` | Plotting |
+| `shap` / `fasttreeshap` | Model explainability |
+| `psutil` | Memory monitoring |
+| `dotenv` / `upath` | Environment config and remote file access |
 
-### Step 7 — Debug intermediate outputs (optional)
+---
 
-```python
-labels_dbg, aux = pipeline.run(points_xyz, return_intermediate=True)
-print(aux.keys())
-```
+## Notes on Performance
 
-### Step 8 — Automatic parameter sweep (recommended)
-
-Because sidewalk geometry can vary by street (narrow sidewalks, drive-over ramps,
-wide sidewalks, local slope), one global threshold set is often suboptimal.
-
-Recommended workflow:
-
-1. Define a small candidate grid for sensitive parameters:
-	- `curb_height_min`
-	- `curb_height_max`
-	- `sidewalk_roughness_max`
-	- `sidewalk_alignment_min`
-	- for stripe mode: `octree_merge_height_delta`
-2. Evaluate each candidate set against ground truth labels (IoU road + IoU sidewalk).
-3. Report both:
-	- global score (whole cloud), and
-	- local scores by spatial zones (e.g., X-axis bins) to detect street-specific failures.
-4. Choose either:
-	- one robust global config (best average), or
-	- zone-specific configs (best per zone) for heterogeneous areas.
-
-The notebook `Notebooks/5_DL_exploration.ipynb` includes a sweep section with this logic.
-
-## Notes on Scaling
-
-- Use downsampling (`voxel_size=0.05` to `0.1`) for very large clouds.
-- `kNN` normal estimation uses parallel workers (`n_jobs` in config).
-- For >10M points, use tiled mode (`run_pipeline_tiled`) and tune:
-	- `tile_size_xy`: 80–200 m
-	- `tile_overlap_xy`: 1–3 m
-	- `tile_min_points`: skip sparse tiles
-- Expect parameter drift across neighborhoods: evaluate by spatial zones before finalizing defaults.
-
-## Runtime Hotspots (Notebook)
-
-- Baseline full-cloud run can take minutes on large point sets.
-- Tiled mode is often slower but safer for memory at very large scale.
-- Two-method comparison roughly doubles runtime.
-- Parameter sweep is the heaviest stage because it reruns the full pipeline many times.
-
-Remote server usage recommendations:
-- Keep `n_jobs=-1` on dedicated servers to use all CPU cores.
-- Start with a reduced sweep grid, then expand around best candidates.
-- Use tiled mode for very large clouds to prevent memory pressure spikes.
+- Most notebooks sample **250 000 – 1 000 000 points** to remain memory-safe. For full-cloud runs, increase `sample_size` incrementally.
+- Set `n_jobs=-1` on machines with many CPU cores (normal estimation and Random Forest training both parallelise well).
+- The segment-level pipeline (Notebook 6) is **significantly faster** than per-point classification because it reduces hundreds of millions of points to thousands of segments before classifying.
+- Expect training to take **2–15 minutes** per LOCO fold depending on sample size and number of trees. Use `n_estimators=100` for quick experiments and `n_estimators=250` for final runs.
 
 

@@ -1,6 +1,20 @@
+"""Utility helpers for quick LAS metadata inspection.
+
+This module is intentionally lightweight and notebook-friendly. The main entry
+point is `describe_las`, which prints the key structural information needed
+before feature engineering or model training.
+"""
+
 import laspy
 
 def describe_las(las):
+    """Print a compact summary of LAS header and spatial metadata.
+
+    Parameters
+    ----------
+    las : laspy.LasData
+        Loaded LAS/LAZ object.
+    """
     print(f"Point Format: {las.header.point_format}")
     print(f"Number of Points: {las.header.point_count}")
     print("Available Dimensions:", list(las.point_format.dimension_names))
