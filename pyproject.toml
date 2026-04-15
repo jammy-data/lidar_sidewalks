@@ -28,5 +28,6 @@ dependencies = [
     "universal_pathlib",
     "webdav4[fsspec]",
     "shap>=0.41",
-    "fasttreeshap"
+    "fasttreeshap",
+    "cloth-simulation-filter"
 ]
